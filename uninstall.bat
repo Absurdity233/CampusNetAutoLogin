@@ -4,7 +4,7 @@ if exist ".venv\Scripts\python.exe" (
   ".venv\Scripts\python.exe" campusnet.py uninstall-startup
   ".venv\Scripts\python.exe" campusnet.py clear-credentials
 ) else (
-  echo Python environment not found; remove CampusNetAutoLogin from HKCU Run manually.
+  echo Python environment not found; delete the CampusNetAutoLogin scheduled task manually.
 )
-echo Uninstalled startup entry and saved credentials. Project files were kept.
+echo Removed the scheduled task and saved credentials. Project files were kept.
 pause

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,8 +14,15 @@ from campusnet_autologin.config import (
 )
 from campusnet_autologin.credentials import Credentials
 from campusnet_autologin.network import extract_available_ssids, extract_ssid, ssid_is_allowed
-from campusnet_autologin.portal import sanitize_url
-from campusnet_autologin.service import attempt_login
+from campusnet_autologin.portal import PortalLoginError, sanitize_url
+from campusnet_autologin.service import (
+    AttemptResult,
+    RetryPolicy,
+    ServiceState,
+    ServiceStateMachine,
+    attempt_login,
+)
+from campusnet_autologin.startup import install_startup, read_startup_command
 
 
 class ConfigTests(unittest.TestCase):
@@ -36,6 +44,11 @@ class ConfigTests(unittest.TestCase):
     def test_invalid_login_scheme_is_rejected(self):
         with self.assertRaises(ValueError):
             normalize_login_url("file:///passwords.txt")
+
+    def test_invalid_portal_adapter_is_rejected(self):
+        config = AppConfig(portal_adapter="unknown")
+        with self.assertRaises(ValueError):
+            config.validate()
 
 
 class NetworkTests(unittest.TestCase):
@@ -106,6 +119,7 @@ class PortalTests(unittest.TestCase):
             )
             result = portal.login_to_portal(config, Credentials("student", "secret"))
             self.assertTrue(result.success)
+            self.assertEqual(result.adapter_name, "eportal")
         finally:
             portal.has_internet = original_check
             server.shutdown()
@@ -131,8 +145,85 @@ class ServiceTests(unittest.TestCase):
         )
         result = attempt_login(config, Credentials("student", "secret"))
         self.assertTrue(result)
+        self.assertEqual(result.state, ServiceState.ONLINE)
         connect_preferred_wifi.assert_called_once_with(config)
         login_to_portal.assert_not_called()
+
+    def test_state_machine_rejects_invalid_transition(self):
+        machine = ServiceStateMachine()
+        with self.assertRaises(RuntimeError):
+            machine.transition(ServiceState.ONLINE)
+
+    def test_retry_policy_backs_off_and_resets(self):
+        policy = RetryPolicy(
+            initial_seconds=5,
+            max_seconds=60,
+            multiplier=2,
+            jitter_ratio=0,
+        )
+        no_wifi = AttemptResult(ServiceState.NO_WIFI, False, "NO_WIFI")
+        wrong_wifi = AttemptResult(
+            ServiceState.WRONG_WIFI,
+            False,
+            "WRONG_WIFI",
+            ssid="Home",
+        )
+        online = AttemptResult(ServiceState.ONLINE, True, "ONLINE", ssid="Campus")
+
+        self.assertEqual(policy.delay_for(no_wifi, online_interval=30), 5)
+        self.assertEqual(policy.delay_for(no_wifi, online_interval=30), 10)
+        self.assertEqual(policy.delay_for(wrong_wifi, online_interval=30), 5)
+        self.assertEqual(policy.delay_for(online, online_interval=30), 30)
+        self.assertEqual(policy.delay_for(no_wifi, online_interval=30), 5)
+
+    def test_portal_failure_has_explicit_state(self):
+        config = AppConfig(allowed_ssids=["Campus"], wifi_wait_seconds=0)
+        with (
+            patch("campusnet_autologin.service.current_wifi_ssid", return_value="Campus"),
+            patch("campusnet_autologin.service.has_internet", return_value=False),
+            patch(
+                "campusnet_autologin.service.login_to_portal",
+                side_effect=PortalLoginError("PASSWORD_FIELD_NOT_FOUND"),
+            ),
+        ):
+            result = attempt_login(config, Credentials("student", "secret"))
+
+        self.assertFalse(result)
+        self.assertEqual(result.state, ServiceState.AUTHENTICATION_FAILED)
+        self.assertEqual(result.code, "PASSWORD_FIELD_NOT_FOUND")
+
+
+class StartupTests(unittest.TestCase):
+    @patch("campusnet_autologin.startup._delete_legacy_run_value")
+    @patch("campusnet_autologin.startup._run_schtasks")
+    def test_install_uses_logon_scheduled_task(self, run_schtasks, delete_legacy):
+        run_schtasks.return_value = subprocess.CompletedProcess([], 0, "SUCCESS", "")
+
+        command = install_startup(Path("C:/CampusNetAutoLogin/campusnet.py"))
+
+        arguments = run_schtasks.call_args.args[0]
+        self.assertIn("/Create", arguments)
+        self.assertIn("ONLOGON", arguments)
+        self.assertIn("0000:10", arguments)
+        self.assertIn(command, arguments)
+        delete_legacy.assert_called_once_with()
+
+    @patch("campusnet_autologin.startup._run_schtasks")
+    def test_read_startup_command_parses_task_xml(self, run_schtasks):
+        task_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+        <Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+          <Actions>
+            <Exec>
+              <Command>C:\\Python\\pythonw.exe</Command>
+              <Arguments>C:\\App\\campusnet.py run</Arguments>
+            </Exec>
+          </Actions>
+        </Task>'''
+        run_schtasks.return_value = subprocess.CompletedProcess([], 0, task_xml, "")
+
+        command = read_startup_command()
+
+        self.assertEqual(command, "C:\\Python\\pythonw.exe C:\\App\\campusnet.py run")
 
 
 if __name__ == "__main__":

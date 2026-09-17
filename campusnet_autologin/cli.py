@@ -97,20 +97,21 @@ def command_run(args) -> int:
 
 def command_install_startup(_args) -> int:
     command = install_startup(_entry_script())
-    print("已启用登录 Windows 后自动运行：")
+    print("已创建登录 Windows 后运行的计划任务：")
     print(command)
     return 0
 
 
 def command_uninstall_startup(_args) -> int:
     removed = uninstall_startup()
-    print("已移除开机启动。" if removed else "未找到开机启动项。")
+    print("已删除登录计划任务。" if removed else "未找到登录计划任务。")
     return 0
 
 
 def command_status(_args) -> int:
     config = load_config()
     credentials = read_credentials(config.credential_target)
+    startup = read_startup_command()
     status = {
         "config_path": str(default_config_path()),
         "log_path": str(default_log_path()),
@@ -119,7 +120,9 @@ def command_status(_args) -> int:
         "auto_connect_wifi": config.auto_connect_wifi,
         "credentials_saved": credentials is not None,
         "username": credentials.username if credentials else None,
-        "startup_enabled": read_startup_command() is not None,
+        "startup_enabled": startup is not None,
+        "startup_type": "scheduled_task",
+        "startup_command": startup,
         "current_ssid": current_wifi_ssid(),
         "internet_available": has_internet(config),
     }
@@ -154,10 +157,10 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--show-browser", action="store_true", help="显示浏览器并登录一次")
     run_parser.set_defaults(handler=command_run)
 
-    install_parser = subparsers.add_parser("install-startup", help="启用开机启动")
+    install_parser = subparsers.add_parser("install-startup", help="创建登录计划任务")
     install_parser.set_defaults(handler=command_install_startup)
 
-    uninstall_parser = subparsers.add_parser("uninstall-startup", help="移除开机启动")
+    uninstall_parser = subparsers.add_parser("uninstall-startup", help="删除登录计划任务")
     uninstall_parser.set_defaults(handler=command_uninstall_startup)
 
     status_parser = subparsers.add_parser("status", help="查看运行配置与网络状态")

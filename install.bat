@@ -23,12 +23,13 @@ echo [3/4] Configuring campus network account...
 ".venv\Scripts\python.exe" campusnet.py setup
 if errorlevel 1 goto :error
 
-echo [4/4] Enabling Windows startup...
+echo [4/4] Creating the Windows logon scheduled task...
 ".venv\Scripts\python.exe" campusnet.py install-startup
 if errorlevel 1 goto :error
 
 echo.
-echo Installation finished. Run test-login.bat while connected to campus Wi-Fi.
+echo Installation finished. The scheduled task starts 10 seconds after logon.
+echo Run test-login.bat while connected to campus Wi-Fi.
 pause
 exit /b 0
 
